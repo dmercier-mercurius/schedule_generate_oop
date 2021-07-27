@@ -1,5 +1,9 @@
+from Database import Database
 from Shift_Functions import *
 import numpy as np
+
+database = Database('ST-AWS')
+business_rules = database.get_all_business_rules()
 
 days = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
 
@@ -36,6 +40,7 @@ def convert_preferred_shift_order(preferred_shift_order_mt):
 
 
 # ensure daily shifts is in the correct order
+# removes all shifts with a quantity of 0 (no need to keep them!)
 # Used in the function below before daily_shifts is returned
 def sort_daily_shifts(daily_shifts):
     days = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
@@ -49,13 +54,18 @@ def sort_daily_shifts(daily_shifts):
             else:
                 i = round(round(i, 2) % 24, 2)
             try:
-                sorted_daily_shifts[day][i] = daily_shifts[day][i]
+                quantity = daily_shifts[day][i]
+                if quantity == 0:
+                    continue
+                else:
+                    sorted_daily_shifts[day][i] = daily_shifts[day][i]
             except KeyError:
                 continue
     return sorted_daily_shifts
 
 
 # convert daily shift data from military time to integer/float equivalents
+# sorts daily shifts
 def convert_daily_shifts(daily_shifts_mt):
     daily_shifts = {}
     for day in days:
@@ -103,20 +113,45 @@ def sort_shifts_by_type(daily_shifts, shift_length):
     for day in days:
         shifts_of_type[day] = {'EVE': [], 'DAY': [], 'MID': []}
         for shift in daily_shifts[day].keys():
-            shifts_of_type[day][determine_type_of_shift(shift, shift_length)].insert(0, shift)
+            shift_type = determine_type_of_shift(shift, shift_length)
+            if shift_type == "EVE":
+                shifts_of_type[day][shift_type].insert(0, shift)
+            else:
+                shifts_of_type[day][shift_type].append(shift)
     return shifts_of_type
+
+
+# creates a dictionary of potential shifts before a given shift on a given day (stored as a set)
+def get_potential_shifts_dict(daily_shifts, shift_length, check_for_desirable=True):
+    potential_shifts = {}
+
+    # look at each day
+    for day in days:
+        potential_shifts[day] = {}
+        potential_shifts[day]['before'] = {}
+        potential_shifts[day]['after'] = {}
+        # look at each shift one by one
+        for shift in daily_shifts[day].keys():
+            # get set of possible shifts before
+            potential_shifts[day]['before'][shift] = identify_set_of_possible_shifts_before(shift, day, daily_shifts, shift_length, check_for_desirable)
+            potential_shifts[day]['after'][shift] = identify_set_of_possible_shifts_after(shift, day, daily_shifts, shift_length, check_for_desirable)
+
+    return potential_shifts
 
 
 # allows unpacking, storing, converting, and error checking of data received from Angular
 # RDO_is_contiguous should be passed from Angular in future
+# check for desirable allows later iterations of program to ignore desirable moves check
 class Data:
-    def __init__(self, input_data, RDO_is_contiguous):
+    def __init__(self, input_data, RDO_is_contiguous, check_for_desirable=True):
+        self.business_rules = business_rules
         self.shift_length = input_data["shift_length"]
         self.preferred_work_pattern = input_data['PWP']
         self.__preferred_shift_order_mt = input_data['PSO']
         self.preferred_shift_order = convert_preferred_shift_order(self.__preferred_shift_order_mt)
         self.__daily_shifts_mt = input_data["daily_shifts"]
         self.daily_shifts = convert_daily_shifts(self.__daily_shifts_mt)
+        self.potential_shifts_dict = get_potential_shifts_dict(self.daily_shifts, self.shift_length, check_for_desirable)
         self.shifts_on_day_of_type = sort_shifts_by_type(self.daily_shifts, self.shift_length)
         self.RDO_is_contiguous = RDO_is_contiguous
         self.number_of_days_in_rdo = 7 - int((40 / self.shift_length))
@@ -188,7 +223,14 @@ class Data:
     # check if PSO follows business rules
     # if not, return a list of error messages specifying the problem(s)
     def check_for_errors_in_preferred_shift_order(self):
+
         list_of_errors = []
+
+        # get number of repeated mid-shifts allowed from business rules
+        number_of_consecutive_mid_shifts = self.business_rules[self.shift_length]['number_of_consecutive_mid_shifts']
+
+        # check if number of consecutive mid_shifts exceeds limit
+        consecutive_mid_counter = 0
 
         if not self.RDO_is_contiguous:
             if not sufficient_rest_between_shifts(self.preferred_shift_order[0], self.preferred_shift_order[1], self.shift_length):

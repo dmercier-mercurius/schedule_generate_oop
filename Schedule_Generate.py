@@ -1,10 +1,10 @@
 from Data import Data, ImpossibleRdoError
-from Cell import *
 from Schedule import *
-from Shift_Functions import *
 import pandas as pd
 from flask import Flask, jsonify, request
 from flask_cors import CORS, cross_origin
+import cProfile
+import pstats
 
 app = Flask(__name__)
 CORS(app)
@@ -16,9 +16,6 @@ pd.set_option("display.max_rows", None, "display.max_columns", None)
 @app.route('/schedule/<int:employees_number>', methods=['GET', 'POST'])
 @cross_origin()
 def main(employees_number):
-
-    # list of days to aid in looping through various tasks
-    days = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
 
     number_of_attempts = 0
     number_of_RDO_failures = 0
@@ -42,16 +39,34 @@ def main(employees_number):
 
         # create a blank schedule
         schedule = Schedule(data)
-        # allow each cell to reference the dataframe
-        Cell.df = schedule.df
+        # allow each shift line to reference the schedule
+        ShiftLine.data = data
+        ShiftLine.schedule = schedule
 
         # assign RDO to schedule
         schedule.assign_rdo()
-        schedule.display()
+
+        # assign PSO to schedule
+        schedule.assign_preferred_shift_order()
+
+        # set potential shifts for each cell
+        schedule.set_potential_shifts()
+
+        # I still need to update potential shifts for the pso shifts already assigned
+        # these changes will only affect the shift_line_dict, not the dataframe
+        # this will allow me to reference potential shifts even if a shift has been assigned in a cell
+
+        # assign shift before RDO
+        schedule.assign_shift_before_rdo('MID')
+
+        # profile = cProfile.Profile()
+        # profile.runcall(main(employees_number))
+        # ps = pstats.Stats(profile)
+        # ps.print_stats()
 
         number_of_attempts += 1
 
-    return vars(data)
+    return ('successfully ran')
 
 if __name__ == '__main__':
     from werkzeug.serving import run_simple

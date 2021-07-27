@@ -1,4 +1,5 @@
-from Database import *
+from Database import Database
+from Day_Functions import *
 import random
 
 database = Database('ST-AWS')
@@ -7,6 +8,12 @@ business_rules = database.get_all_business_rules()
 
 # receives starting time of a shift in the range 0 - 23 and returns type of shift
 def determine_type_of_shift(shift_start, shift_length):
+    if shift_start == "X":
+        return 'RDO'
+
+    if shift_start == "-":
+        return 'unassigned'
+
     if (7 - shift_length / 2) < shift_start <= (7 + shift_length / 2):
         return "DAY"
     elif (15 - shift_length / 2) < shift_start <= (15 + shift_length / 2):
@@ -20,11 +27,12 @@ def determine_type_of_shift(shift_start, shift_length):
 def sufficient_rest_between_shifts(prev_shift, next_shift, shift_length):
 
     global business_rules
+    business_rules_for_given_shift_length = business_rules[shift_length]
 
     if prev_shift == 'X' or next_shift == 'X':
         return True
 
-    if isinstance(prev_shift, list) or isinstance(next_shift, list):
+    if prev_shift == '-' or next_shift == '-':
         return True
 
     # Case 1: prev_shift starts on given day
@@ -59,19 +67,116 @@ def sufficient_rest_between_shifts(prev_shift, next_shift, shift_length):
 
     # check if rest is sufficient for varying cases
     if prev_shift_type == "DAY" and next_shift_type == "MID":
-        if rest < business_rules['time_between_day_shift_to_mid_shift']:
+        if shift_length == 8 and prev_shift <= 5.5:
             sufficient_rest = False
+        else:
+            if rest < business_rules_for_given_shift_length['time_between_day_shift_to_mid_shift']:
+                sufficient_rest = False
     elif prev_shift_type == "EVE" and next_shift_type == "DAY":
-        if rest < business_rules['time_between_eve_shift_to_day_shift']:
+        if rest < business_rules_for_given_shift_length['time_between_eve_shift_to_day_shift']:
             sufficient_rest = False
     elif prev_shift_type == "MID" and next_shift_type == "MID":
-        if rest < business_rules['time_between_mid_shift_to_mid_shift']:
+        if rest < business_rules_for_given_shift_length['time_between_mid_shift_to_any_shift']:
             sufficient_rest = False
     else:
         if rest < 8:
             sufficient_rest = False
 
     return sufficient_rest
+
+
+# Check if transition between two shifts is "desirable"
+def desirable_move_between_shifts(prev_shift, next_shift, shift_length):
+
+    if prev_shift == "-" or next_shift == '-':
+        return True
+
+    if prev_shift == "X" or next_shift == 'X':
+        return True
+
+    prev_shift_type = determine_type_of_shift(prev_shift, shift_length)
+
+    next_shift_type = determine_type_of_shift(next_shift, shift_length)
+
+    if next_shift == "X":
+        return True
+
+    if prev_shift == "X":
+        return True
+
+    if prev_shift_type == "EVE":
+        if next_shift_type == "EVE" or next_shift_type == "DAY":
+            return True
+        else:
+            return False
+    elif prev_shift_type == "DAY":
+        if next_shift_type == "DAY" or next_shift_type == "MID":
+            return True
+        else:
+            return False
+    else:
+        if next_shift_type == "MID":
+            return True
+        else:
+            return False
+
+
+# Identify the sets of shifts that can follow a given shift
+# by default it takes desirable moves into account, but this can be set to False
+def identify_set_of_possible_shifts_before(shift, day, daily_shifts, shift_length, check_for_desirable=True):
+    potential_shifts_before = set()
+
+    # look at all shifts on the previous day
+    for prev_shift in daily_shifts[previous(day)].keys():
+
+        # check rest requirements
+        if sufficient_rest_between_shifts(prev_shift, shift, shift_length):
+            satisfy_rest_requirements = True
+        else:
+            satisfy_rest_requirements = False
+
+        # check desirable move requirements (unless function call specifies not to)
+        if check_for_desirable:
+            if desirable_move_between_shifts(prev_shift, shift, shift_length):
+                satisfy_desirable_move_requirements = True
+            else:
+                satisfy_desirable_move_requirements = False
+        else:
+            satisfy_desirable_move_requirements = True
+
+        if satisfy_rest_requirements and satisfy_desirable_move_requirements:
+            potential_shifts_before.add(prev_shift)
+
+    return potential_shifts_before
+
+
+# Identify the sets of shifts that can follow a given shift
+# by default it takes desirable moves into account, but this can be set to False
+def identify_set_of_possible_shifts_after(shift, day, daily_shifts, shift_length, check_for_desirable=True):
+    potential_shifts_after = set()
+
+    # look at all shifts on the next day
+    for next_shift in daily_shifts[next(day)].keys():
+
+        # check rest requirements
+        if sufficient_rest_between_shifts(shift, next_shift, shift_length):
+            satisfy_rest_requirements = True
+        else:
+            satisfy_rest_requirements = False
+
+        # check desirable move requirements (unless function call specifies not to)
+        if check_for_desirable:
+            if desirable_move_between_shifts(shift, next_shift, shift_length):
+                satisfy_desirable_move_requirements = True
+            else:
+                satisfy_desirable_move_requirements = False
+        else:
+            satisfy_desirable_move_requirements = True
+
+        if satisfy_rest_requirements and satisfy_desirable_move_requirements:
+            potential_shifts_after.add(next_shift)
+
+    return potential_shifts_after
 
 
 # Identifies the shift on a given day with the highest quantity

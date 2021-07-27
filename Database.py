@@ -24,13 +24,17 @@ class Database:
 
         try:
             with conn.cursor() as cursor:
-                sql_statement = "SELECT Parameter, Value FROM ref_faa_business_rules"
+                sql_statement = "SELECT Parameter, Value, Shift_Length FROM ztest_faa_business_rules"
                 cursor.execute(sql_statement)
                 business_rules = cursor.fetchall()
 
                 business_rules_dict = {}
                 for rule in business_rules:
-                    business_rules_dict[rule[0]] = rule[1]
+                    try:
+                        business_rules_dict[rule[2]][rule[0]] = rule[1]
+                    except KeyError:
+                        business_rules_dict[rule[2]] = {}
+                        business_rules_dict[rule[2]][rule[0]] = rule[1]
 
                 return business_rules_dict
 
