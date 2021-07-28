@@ -94,7 +94,7 @@ class Schedule:
                     # Assign RDO to df and shift line
                     if day in pair_triple_days:
                         self.df.at[row, day] = "X"
-                        self.shift_lines[row].assign_shift(day, "X")
+                        self.shift_lines[row].insert_shift_into_shifts_dict(day, "X")
             # advance to the next group of rdo pairs / triples
             first_row_to_fill += quantity
 
@@ -143,9 +143,9 @@ class Schedule:
                         # move to next pair triple
                         continue
 
-                # ask shift line to fill itself with PSO
-                # will return true or false based on success
-                pair_triple_filled_with_pso[pair_triple] = self.shift_lines[row].fill_with_pso()
+                    # ask shift line to fill itself with PSO
+                    # will return true or false based on success
+                    pair_triple_filled_with_pso[pair_triple] = self.shift_lines[row].fill_with_pso()
 
     def update_shifts_assigned_and_missing_shifts_with_assigned_shift(self, day, shift):
         try:
@@ -168,47 +168,184 @@ class Schedule:
             if self.row_not_filled(row):
                 for day in days:
                     self.df.loc[row, day] = potential_shifts_dict[day]
-                    print(potential_shifts_dict[day])
 
-    def cell_before_two_consecutive_rdo(self, cell):
-        current_cell = cell
-        one_cell_after = cell.next_day_cell
-        two_cells_after = one_cell_after.next_day_cell
-        for day in days:
-            # determine if cell is before 2 day consecutive RDO
-            if one_cell_after.assigned_shift == 'X' and two_cells_after.assigned_shift == 'X':
-               if current_cell.assigned_shift == None:
-                   return "empty"
-               else:
-                   return 'filled'
-            else:
-                return False
+    def update_potential_shifts(self):
+        for row in range(self.data.number_of_workers):
+            shift_line = self.shift_lines[row]
+            for day in days:
+                shift_line.update_potential_shifts_on_day(day)
 
     # this allows you to identify a type of shift you would like to fill at the end of a shift line (before RDO)
-    def assign_shift_before_rdo(self, shift_type):
+    def assign_desired_shift_before_rdo(self, shift_type):
         # first assign shifts on blank day before RDO
         # only one loop necessary (multiple loops will not free up days before RDO)
-        # look at each cell
-        for day in days:
-            shifts_of_type = self.data.shifts_on_day_of_type[day][shift_type].copy()
+        # look at each shift line
+        for row in range(self.data.number_of_workers):
+            shift_line = self.shift_lines[row]
+            # skip shift lines that are already filled
+            if shift_line.is_filled:
+                continue
+            # try to assign desired shift of type on blank day before RDO
+            try:
+                shift_line.assign_shift_on_empty_before_consecutive_rdo(shift_type)
+            except ShiftAlreadyFilledError:
+                print('The program tried to fill a cell that was already filled')
+
+        # next try to assign shifts on blank day before shift of same shift_type
+        # track if any shift was assigned on a pass through all shift lines
+        shift_assigned_during_loop = True
+
+        # multiple loops necessary as it may be possible to stack multiple times
+        while shift_assigned_during_loop:
+            shift_assigned_during_loop = False
+
             for row in range(self.data.number_of_workers):
-                current_cell = self.df.at[row, day]
-                # determine if cell is blank and if next day is an RDO
-                if self.cell_before_two_consecutive_rdo(current_cell) == 'empty':
-                    # look at each shift of given type
-                    for shift in shifts_of_type:
+                shift_line = self.shift_lines[row]
+                # skip shift lines that are already filled
+                if shift_line.is_filled:
+                    continue
+                # try to assign desired shift of type on blank day before shift of same type
+                try:
+                    shift_assigned_during_loop = shift_line.assign_shift_on_empty_before_shift_of_same_type(shift_type)
+                except Exception as error:
+                    print('The program encountered an error while filling a blank cell before a shift of type {}'.format(shift_type))
+                    print(error)
+
+        # next try to assign shifts on filled day before shift of same type
+        # track if any shift was assigned on a pass through all shift lines
+        shift_assigned_during_loop = True
+
+        # multiple loops necessary as it may be possible to stack multiple times
+        while shift_assigned_during_loop:
+            shift_assigned_during_loop = False
+
+            for row in range(self.data.number_of_workers):
+                shift_line = self.shift_lines[row]
+                # try to assign desired shift of type on blank day before shift of same type
+                try:
+                    shift_assigned_during_loop = shift_line.replace_filled_shift_before_shift_of_same_type(shift_type)
+                except Exception as error:
+                    print(
+                        'The program encountered an error while filling a blank cell before a shift of type {}'.format(shift_type))
+                    print(error)
+
+    def fill_remaining_schedule(self):
+        # look at each day
+        for day in days:
+            # assume no row needs to be filled
+            first_row_to_fill = self.data.number_of_workers
+            # find the shift line where the day is the day before two consecutive days off
+            day_before_consecutive_rdo_identified = False
+            # look at each row / shift_line
+            for row in range(self.data.number_of_workers):
+                shift_line = self.shift_lines[row]
+                # find day before consecutive rdo
+                day_after_consecutive_rdo = shift_line.get_day_before_consecutive_rdo()
+                # check if this day matches the current day
+                if day_after_consecutive_rdo == day:
+                    day_before_consecutive_rdo_identified = True
+                # check if this day is empty
+                if day_before_consecutive_rdo_identified and shift_line.shifts_dict[day] == '-':
+                    first_row_to_fill = row
+                    break
+
+            # Loop from identified row to last row, filling shifts
+            for i in range(first_row_to_fill, self.data.number_of_workers):
+                # look at each row
+                shift_line = self.shift_lines[i]
+                # determine if cell is empty on the current day
+                if shift_line.shifts_dict[day] == '-':
+                    # if cell is empty - try to assign shifts
+                    # make sure potential shifts list is in the correct order (all mids should be gone so just sort)
+                    shift_line.potential_shifts_dict[day].sort()
+                    # look at all potential shifts
+                    for shift in shift_line.potential_shifts_dict[day]:
                         try:
-                            # try to assign shift
-                            current_cell.assign_shift(shift)
-                            # if it can be assigned, don't try to assign other shifts (break)
+                            # if shift can be assigned, there will be no error
+                            shift_line.assign_shift(day, shift)
+                            # break from loop of potential shifts and proceed to next loop
                             break
-                        except ShiftCannotBeAssignedError:
-                            # if shift cannot be assigned, continue to look at the rest of the shifts
+                        except ShiftCannotBeAssignedError or BusinessRulesFailedError:
+                            # if shift can't be assigned, move on to next potential shift in list
                             continue
-                    # check if you assigned the last of a shift; remove if you did
-                    if self.missing_shifts[day][shift] == 0:
-                        shifts_of_type.remove(shift)
-                        # check if there are no more shifts to assign; if so move to next day
-                        if len(shifts_of_type) == 0:
+                else:
+                    # if cell is not empty, move to the next row
+                    continue
+
+            # Loop from first row to identified row, filling shifts
+            for i in range(0, first_row_to_fill):
+                # look at each row
+                shift_line = self.shift_lines[i]
+                # determine if cell is empty on the current day
+                if shift_line.shifts_dict[day] == '-':
+                    # if cell is empty - try to assign shifts
+                    # make sure potential shifts list is in the correct order (all mids should be gone so just sort)
+                    shift_line.potential_shifts_dict[day].sort()
+                    # look at all potential shifts
+                    for shift in shift_line.potential_shifts_dict[day]:
+                        try:
+                            # if shift can be assigned, there will be no error
+                            shift_line.assign_shift(day, shift)
+                            # break from loop of potential shifts and proceed to next loop
                             break
+                        except ShiftCannotBeAssignedError or BusinessRulesFailedError:
+                            # if shift can't be assigned, move on to next potential shift in list
+                            continue
+                else:
+                    # if cell is not empty, move to the next row
+                    continue
+
+    def determine_if_shift_lines_are_filled(self):
+        for shift_line in self.shift_lines:
+            shift_line.is_filled = True
+            for day in days:
+                if shift_line.shifts_dict[day] == '-':
+                    shift_line.is_filled = False
+                    break
+
+    def clean_up_missing_shifts_dict(self):
+        cleaned_missing_shifts = {}
+        for day in days:
+            cleaned_missing_shifts[day] = {}
+            for shift, quantity in self.missing_shifts[day].items():
+                if quantity > 0:
+                    cleaned_missing_shifts[day][shift] = quantity
+
+        self.missing_shifts = cleaned_missing_shifts
+
+    def fill_empty_cells_by_swapping(self):
+        # might require multiple passes - track if a successful swap occurs
+        successful_swap = True
+
+        # keep looping until no successful swap occurs
+        while successful_swap:
+            # assume no successful swap occurs
+            successful_swap = False
+
+            # look at each shift line
+            for row in range(len(self.shift_lines)):
+                shift_line = self.shift_lines[row]
+                # only look at shift line if it is not full:
+                if not shift_line.is_filled:
+                    days_with_missing_shifts = []
+                    # look at each day and create list of days with missing shifts
+                    for day in days:
+                        if shift_line.shifts_dict[day] == '-':
+                            days_with_missing_shifts.append(day)
+
+                    # determine if the shift line has missing shifts
+                    if len(days_with_missing_shifts) > 0:
+                        # ask shift line to try to fill by swapping
+                        successful_swap = shift_line.fill_by_swapping(days_with_missing_shifts)
+                        if successful_swap:
+                            shift_line.is_filled = True
+                            self.clean_up_missing_shifts_dict()
+
+
+
+
+
+
+
+
 

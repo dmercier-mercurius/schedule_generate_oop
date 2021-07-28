@@ -52,12 +52,25 @@ def main(employees_number):
         # set potential shifts for each cell
         schedule.set_potential_shifts()
 
-        # I still need to update potential shifts for the pso shifts already assigned
-        # these changes will only affect the shift_line_dict, not the dataframe
-        # this will allow me to reference potential shifts even if a shift has been assigned in a cell
+        # update potential shifts for each cell
+        schedule.update_potential_shifts()
 
         # assign shift before RDO
-        schedule.assign_shift_before_rdo('MID')
+        schedule.assign_desired_shift_before_rdo('MID')
+
+        # fill remaining schedule with shifts
+        schedule.fill_remaining_schedule()
+
+        # identify which cells are filled and which ones have missing shifts
+        schedule.determine_if_shift_lines_are_filled()
+
+        # clean up missing shifts dict
+        schedule.clean_up_missing_shifts_dict()
+        print(schedule.df)
+
+        # try to fill missing shifts on shift-lines by swapping
+        schedule.fill_empty_cells_by_swapping()
+        print(schedule.df)
 
         # profile = cProfile.Profile()
         # profile.runcall(main(employees_number))
