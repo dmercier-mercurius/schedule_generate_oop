@@ -73,6 +73,7 @@ class Schedule:
         self.rdo_pair_triples = []
         self.shifts_assigned = set_shifts_assigned(self.df, self.data.number_of_workers)
         self.missing_shifts = set_missing_shifts(self.shifts_assigned, self.data.daily_shifts)
+        self.grade = 0
 
     # assigns rdo pairs to schedule
     # stores name of each rdo pair/triple to schedule attribute
@@ -221,12 +222,15 @@ class Schedule:
 
             for row in range(self.data.number_of_workers):
                 shift_line = self.shift_lines[row]
-                # try to assign desired shift of type on blank day before shift of same type
+                # skip a line if it is not filled
+                if not shift_line.is_filled:
+                    continue
+                # try to assign desired shift of type on filled day before shift of same type
                 try:
                     shift_assigned_during_loop = shift_line.replace_filled_shift_before_shift_of_same_type(shift_type)
                 except Exception as error:
                     print(
-                        'The program encountered an error while filling a blank cell before a shift of type {}'.format(shift_type))
+                        'The program encountered an error while filling a filled cell before a shift of type {}'.format(shift_type))
                     print(error)
 
     def fill_remaining_schedule(self):
@@ -259,13 +263,17 @@ class Schedule:
                     # make sure potential shifts list is in the correct order (all mids should be gone so just sort)
                     shift_line.potential_shifts_dict[day].sort()
                     # look at all potential shifts
-                    for shift in shift_line.potential_shifts_dict[day]:
+                    # for shift in shift_line.potential_shifts_dict[day]:
+                    for shift in self.data.daily_shifts[day].keys():
                         try:
                             # if shift can be assigned, there will be no error
                             shift_line.assign_shift(day, shift)
                             # break from loop of potential shifts and proceed to next loop
                             break
-                        except ShiftCannotBeAssignedError or BusinessRulesFailedError:
+                        except ShiftCannotBeAssignedError:
+                            # if shift can't be assigned, move on to next potential shift in list
+                            continue
+                        except BusinessRulesFailedError:
                             # if shift can't be assigned, move on to next potential shift in list
                             continue
                 else:
@@ -282,13 +290,17 @@ class Schedule:
                     # make sure potential shifts list is in the correct order (all mids should be gone so just sort)
                     shift_line.potential_shifts_dict[day].sort()
                     # look at all potential shifts
-                    for shift in shift_line.potential_shifts_dict[day]:
+                    # for shift in shift_line.potential_shifts_dict[day]:
+                    for shift in self.data.daily_shifts[day].keys():
                         try:
                             # if shift can be assigned, there will be no error
                             shift_line.assign_shift(day, shift)
                             # break from loop of potential shifts and proceed to next loop
                             break
-                        except ShiftCannotBeAssignedError or BusinessRulesFailedError:
+                        except ShiftCannotBeAssignedError:
+                            # if shift can't be assigned, move on to next potential shift in list
+                            continue
+                        except BusinessRulesFailedError:
                             # if shift can't be assigned, move on to next potential shift in list
                             continue
                 else:
@@ -335,11 +347,98 @@ class Schedule:
 
                     # determine if the shift line has missing shifts
                     if len(days_with_missing_shifts) > 0:
-                        # ask shift line to try to fill by swapping
-                        successful_swap = shift_line.fill_by_swapping(days_with_missing_shifts)
+                        # ask shift line to first try to fill by directly replacing missing shifts
+                        successful_swap = shift_line.fill_by_direct_replacement(days_with_missing_shifts)
                         if successful_swap:
+                            # clean things up and move to next shift line
                             shift_line.is_filled = True
                             self.clean_up_missing_shifts_dict()
+                            continue
+                        else:
+                            print(shift_line.row)
+                            # try to fill by swapping series of shifts before and after a missing shift
+                            # first, determine direction causing missing shift (before, after, or both)
+                            # There will only be one missing day (or else I only want to look at first day for now)
+                            missing_day = days_with_missing_shifts[0]
+
+                            # look at each missing shift one by one
+                            for missing_shift in self.missing_shifts[missing_day].keys():
+                                # determine direction(s) causing missing shift
+                                problem_direction = shift_line.determine_direction_causing_missing_shift(missing_day, missing_shift)
+                                print('problem direction', problem_direction)
+
+                                if problem_direction == "both":
+                                    # try to swap both directions
+                                    # if both directions swapped, indicate a successful swap has occurred
+                                    successful_swap = shift_line.fill_by_swapping(missing_day, missing_shift, "previous") and shift_line.fill_by_swapping(missing_day, missing_shift, "next")
+
+                                elif problem_direction == "previous" or problem_direction == "next":
+                                    # swap in specified direction
+                                    successful_swap = shift_line.fill_by_swapping(missing_day, missing_shift, problem_direction)
+                                else:
+                                    # if problem direction is neither, do nothing (for now) and proceed to next shift
+                                    # I will look into code if this happens
+                                    continue
+                                if successful_swap:
+                                    # assign missing shift only if swap has resolved issue
+                                    shift_line.shifts_dict[missing_day] = missing_shift
+                                    shift_line.push_shift_line_to_df()
+                                    self.update_shifts_assigned_and_missing_shifts_with_assigned_shift(missing_day, missing_shift)
+                                    # clean up lists and mark line filled
+                                    self.clean_up_missing_shifts_dict()
+                                    shift_line.is_filled = True
+                                    # break out of missing shift loop for this current line
+                                    break
+
+    def get_number_of_missing_shifts(self):
+        number_of_missing_shifts = 0
+        for day in self.missing_shifts.keys():
+            for quantity in self.missing_shifts[day].values():
+                number_of_missing_shifts += quantity
+
+        return number_of_missing_shifts
+
+    def fill_missing_shifts_ignore_desirable_moves(self):
+        for shift_line in self.shift_lines:
+            for day, assigned_shift in shift_line.shifts_dict.items():
+                if assigned_shift == '-':
+                    for potential_shift in self.missing_shifts[day].keys():
+                        try:
+                            shift_line.assign_shift(day, potential_shift, ignore_desirable_moves=True)
+                            break
+                        except BusinessRulesFailedError:
+                            continue
+                        except ShiftCannotBeAssignedError:
+                            continue
+
+    def fill_missing_shifts_ignore_daily_shift_requirements(self):
+        for shift_line in self.shift_lines:
+            for day, assigned_shift in shift_line.shifts_dict.items():
+                if assigned_shift == '-':
+                    for potential_shift in self.data.daily_shifts[day].keys():
+                        shift_line.shifts_dict[day] = potential_shift
+                        if shift_line.check_all_business_rules('MID', 5, ignore_desirable_moves=True):
+                            shift_assigned = True
+                            break
+                        else:
+                            shift_assigned = False
+                            continue
+
+                    if not shift_assigned:
+                        shift_line.shifts_dict[day] = '-'
+
+    def calculate_grade(self, missing_before_fill, missing_after_first_fill, missing_after_second_fill):
+        self.grade = 100
+        pass
+
+
+
+
+
+
+
+
+
 
 
 

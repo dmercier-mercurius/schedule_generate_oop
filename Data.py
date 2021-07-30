@@ -1,4 +1,4 @@
-from Database import Database
+from ShiftLine import *
 from Shift_Functions import *
 import numpy as np
 
@@ -222,34 +222,31 @@ class Data:
 
     # check if PSO follows business rules
     # if not, return a list of error messages specifying the problem(s)
-    def check_for_errors_in_preferred_shift_order(self):
+    def errors_in_preferred_shift_order(self):
 
-        list_of_errors = []
+        # create blank shift_line
+        shift_line = ShiftLine('PSO', 8)
 
-        # get number of repeated mid-shifts allowed from business rules
-        number_of_consecutive_mid_shifts = self.business_rules[self.shift_length]['number_of_consecutive_mid_shifts']
-
-        # check if number of consecutive mid_shifts exceeds limit
-        consecutive_mid_counter = 0
-
-        if not self.RDO_is_contiguous:
-            if not sufficient_rest_between_shifts(self.preferred_shift_order[0], self.preferred_shift_order[1], self.shift_length):
-                list_of_errors.append("Insufficient rest between shifts {} and {}".format(self.preferred_shift_order[0], self.preferred_shift_order[1]))
-            if not sufficient_rest_between_shifts(self.preferred_shift_order[2], self.preferred_shift_order[3], self.shift_length):
-                list_of_errors.append("Insufficient rest between shifts {} and {}".format(self.preferred_shift_order[2], self.preferred_shift_order[3]))
+        # insert RDO into the preferred shift order depending on number of RDO and if they are contiguous
+        if self.number_of_days_in_rdo == 2:
+            list_of_shifts = self.preferred_shift_order + ['X', 'X']
         else:
-            for i in range(len(self.preferred_shift_order) - 1):
-                prev_shift = self.preferred_shift_order[i]
-                next_shift = self.preferred_shift_order[i + 1]
-                if sufficient_rest_between_shifts(prev_shift, next_shift, self.shift_length):
-                    continue
-                else:
-                    list_of_errors.append("Insufficient rest between shifts {} and {}".format(prev_shift, next_shift))
+            if self.RDO_is_contiguous:
+                list_of_shifts = self.preferred_shift_order[0:1] + ['X'] + self.preferred_shift_order[2:3] + ['X', 'X']
+            else:
+                list_of_shifts = self.preferred_shift_order + ['X', 'X', 'X']
 
-        if len(list_of_errors) > 0:
-            return list_of_errors
-        else:
+        # fill shift line with PSO
+        for i in range(len(days)):
+            shift_line.shifts_dict[days[i]] = list_of_shifts[i]
+
+        # test all business rules
+        passes_business_rules = shift_line.check_all_business_rules('MID', 5)
+
+        if passes_business_rules:
             return False
+        else:
+            return True
 
     # Identifies any shifts that have an unusually high quantity using an outlier test
     def check_for_large_outliers(self):
@@ -285,10 +282,10 @@ class Data:
                     if shift[0] == "0":
                         shift = shift[1:]
                     try:
-                        outliers[day][shift] = quantity
+                        outliers[shift][day] = quantity
                     except KeyError:
-                        outliers[day] = {}
-                        outliers[day][shift] = quantity
+                        outliers[shift] = {}
+                        outliers[shift][day] = quantity
 
         if outlier_located:
             return outliers
