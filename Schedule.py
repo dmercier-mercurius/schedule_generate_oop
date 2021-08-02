@@ -1,21 +1,9 @@
-from Cell import *
 from ShiftLine import *
 import pandas as pd
 
 # list of days to aid in looping through various tasks
 days = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
 
-
-# def create_empty_dataframe(number_of_workers, shift_length):
-#     blank_schedule = {}
-#     for day in days:
-#         blank_schedule[day] = [None] * number_of_workers
-#         df_to_return = pd.DataFrame(blank_schedule)
-#     for day in days:
-#         for i in range(number_of_workers):
-#             cell = Cell(i, day, shift_length)
-#             df_to_return.at[i, day] = cell
-#     return df_to_return
 
 def create_empty_dataframe(number_of_workers):
     blank_schedule = {}
@@ -64,7 +52,7 @@ def set_missing_shifts(shifts_assigned, daily_shifts):
 
 
 class Schedule:
-    list_of_top_3 = []
+    top_generated_schedules = []
 
     def __init__(self, data):
         self.data = data
@@ -74,6 +62,7 @@ class Schedule:
         self.shifts_assigned = set_shifts_assigned(self.df, self.data.number_of_workers)
         self.missing_shifts = set_missing_shifts(self.shifts_assigned, self.data.daily_shifts)
         self.grade = 0
+        self.shift_totals_df = None
 
     # assigns rdo pairs to schedule
     # stores name of each rdo pair/triple to schedule attribute
@@ -110,7 +99,7 @@ class Schedule:
                 continue
         return row_not_filled
 
-    def assign_preferred_shift_order(self):
+    def assign_preferred_shift_order(self, number_of_attempts):
         # track if each type of rdo pair/triple has been filled with as many rows as possible
         # assume false after entering the loop and then turn back to true if a row is successfully filled
         pair_triple_filled_with_pso = {}
@@ -146,7 +135,7 @@ class Schedule:
 
                     # ask shift line to fill itself with PSO
                     # will return true or false based on success
-                    pair_triple_filled_with_pso[pair_triple] = self.shift_lines[row].fill_with_pso()
+                    pair_triple_filled_with_pso[pair_triple] = self.shift_lines[row].fill_with_pso(number_of_attempts)
 
     def update_shifts_assigned_and_missing_shifts_with_assigned_shift(self, day, shift):
         try:
@@ -232,6 +221,57 @@ class Schedule:
                     print(
                         'The program encountered an error while filling a filled cell before a shift of type {}'.format(shift_type))
                     print(error)
+
+    # this allows you to identify a type of shift you would like to fill at the end of a shift line (before RDO)
+    def assign_desired_shift_after_rdo(self, shift_type):
+        # first assign shifts on blank day before RDO
+        # only one loop necessary (multiple loops will not free up days before RDO)
+        # look at each shift line
+        for row in range(self.data.number_of_workers):
+            shift_line = self.shift_lines[row]
+            # skip shift lines that are already filled
+            if shift_line.is_filled:
+                continue
+            # try to assign desired shift of type on blank day before RDO
+            try:
+                shift_line.assign_shift_on_empty_after_consecutive_rdo(shift_type)
+            except ShiftAlreadyFilledError:
+                print('The program tried to fill a cell that was already filled')
+
+        # next try to assign shifts on filled day after shift of same type
+        # track if any shift was assigned on a pass through all shift lines
+        shift_assigned_during_loop = True
+
+        # multiple loops necessary as it may be possible to stack multiple times
+        while shift_assigned_during_loop:
+            shift_assigned_during_loop = False
+
+            for row in range(self.data.number_of_workers):
+                shift_line = self.shift_lines[row]
+                # skip a line if it is not filled
+                if not shift_line.is_filled:
+                    continue
+                # try to assign desired shift of type on filled day after shift of same type
+                try:
+                    shift_assigned_during_loop = shift_line.replace_filled_shift_after_shift_of_same_type(shift_type)
+                except Exception as error:
+                    print(
+                        'The program encountered an error while filling a filled cell after a shift of type {}'.format(shift_type))
+                    print(error)
+
+        # next assign shifts on filled day after RDO
+        # only one loop necessary (multiple loops will not free up days after RDO)
+        # look at each shift line
+        for row in range(self.data.number_of_workers):
+            shift_line = self.shift_lines[row]
+            # skip shift lines that are not filled
+            if not shift_line.is_filled:
+                continue
+            # try to assign desired shift of type on filled day after RDO
+            try:
+                shift_line.assign_shift_on_filled_after_consecutive_rdo(shift_type)
+            except ShiftAlreadyFilledError:
+                print('The program tried to fill a cell that was already filled')
 
     def fill_remaining_schedule(self):
         # look at each day
@@ -325,7 +365,7 @@ class Schedule:
 
         self.missing_shifts = cleaned_missing_shifts
 
-    def fill_empty_cells_by_swapping(self):
+    def fill_empty_cells_by_swapping(self, ignore_desirable_moves=False):
         # might require multiple passes - track if a successful swap occurs
         successful_swap = True
 
@@ -348,14 +388,13 @@ class Schedule:
                     # determine if the shift line has missing shifts
                     if len(days_with_missing_shifts) > 0:
                         # ask shift line to first try to fill by directly replacing missing shifts
-                        successful_swap = shift_line.fill_by_direct_replacement(days_with_missing_shifts)
+                        successful_swap = shift_line.fill_by_direct_replacement(days_with_missing_shifts, ignore_desirable_moves=ignore_desirable_moves)
                         if successful_swap:
                             # clean things up and move to next shift line
                             shift_line.is_filled = True
                             self.clean_up_missing_shifts_dict()
                             continue
                         else:
-                            print(shift_line.row)
                             # try to fill by swapping series of shifts before and after a missing shift
                             # first, determine direction causing missing shift (before, after, or both)
                             # There will only be one missing day (or else I only want to look at first day for now)
@@ -370,11 +409,11 @@ class Schedule:
                                 if problem_direction == "both":
                                     # try to swap both directions
                                     # if both directions swapped, indicate a successful swap has occurred
-                                    successful_swap = shift_line.fill_by_swapping(missing_day, missing_shift, "previous") and shift_line.fill_by_swapping(missing_day, missing_shift, "next")
+                                    successful_swap = shift_line.fill_by_swapping(missing_day, missing_shift, "previous", ignore_desirable_moves=ignore_desirable_moves) and shift_line.fill_by_swapping(missing_day, missing_shift, "next", ignore_desirable_moves=ignore_desirable_moves)
 
                                 elif problem_direction == "previous" or problem_direction == "next":
                                     # swap in specified direction
-                                    successful_swap = shift_line.fill_by_swapping(missing_day, missing_shift, problem_direction)
+                                    successful_swap = shift_line.fill_by_swapping(missing_day, missing_shift, problem_direction, ignore_desirable_moves=ignore_desirable_moves)
                                 else:
                                     # if problem direction is neither, do nothing (for now) and proceed to next shift
                                     # I will look into code if this happens
@@ -405,6 +444,7 @@ class Schedule:
                     for potential_shift in self.missing_shifts[day].keys():
                         try:
                             shift_line.assign_shift(day, potential_shift, ignore_desirable_moves=True)
+                            self.update_shifts_assigned_and_missing_shifts_with_assigned_shift(day, potential_shift)
                             break
                         except BusinessRulesFailedError:
                             continue
@@ -412,13 +452,16 @@ class Schedule:
                             continue
 
     def fill_missing_shifts_ignore_daily_shift_requirements(self):
+        shifts_outside_daily_shift_requirements = 0
+
         for shift_line in self.shift_lines:
             for day, assigned_shift in shift_line.shifts_dict.items():
                 if assigned_shift == '-':
                     for potential_shift in self.data.daily_shifts[day].keys():
                         shift_line.shifts_dict[day] = potential_shift
-                        if shift_line.check_all_business_rules('MID', 5, ignore_desirable_moves=True):
+                        if shift_line.check_all_business_rules('MID', ignore_desirable_moves=True):
                             shift_assigned = True
+                            self.shifts_assigned[day][potential_shift] += 1
                             break
                         else:
                             shift_assigned = False
@@ -426,25 +469,176 @@ class Schedule:
 
                     if not shift_assigned:
                         shift_line.shifts_dict[day] = '-'
+        return shifts_outside_daily_shift_requirements
 
-    def calculate_grade(self, missing_before_fill, missing_after_first_fill, missing_after_second_fill):
+    def calculate_grade(self, shifts_with_undesirable_moves, shifts_ignoring_daily_shift_requirements):
         self.grade = 100
-        pass
 
+        # if there are still missing shifts after fill attempts, give grade of 0
+        if self.get_number_of_missing_shifts() > 0:
+            self.grade = 0
+        # if all shifts filled...
+        # take away 10 for every shift that ignored daily shift requirements
+        # take away 1 for every shift with an undesirable move
+        else:
+            self.grade = self.grade - (10 * shifts_ignoring_daily_shift_requirements) - shifts_with_undesirable_moves
 
+    def store_if_high_grade(self, max_number_of_schedules):
+        # track if schedule is stored
+        schedule_stored = False
 
+        # if no schedules have been stored (i.e. this is the first schedule)
+        if len(self.top_generated_schedules) == 0:
+            # store this schedule
+            self.top_generated_schedules.append(self)
+            schedule_stored = True
+        # if schedules have already been stored...
+        else:
+            # look at each existing schedule
+            for i in range(len(self.top_generated_schedules)):
+                # if current schedule grade is higher than schedule in list
+                if self.grade > self.top_generated_schedules[i].grade:
+                    # insert current schedule into list
+                    self.top_generated_schedules.insert(i, self)
+                    schedule_stored = True
+                    # check if inserting caused the length of top schedules to exceed maximum
+                    if len(self.top_generated_schedules) > max_number_of_schedules:
+                        # if so, remove the last schedule from list (this has the lowest grade)
+                        self.top_generated_schedules.pop()
+                    break
+            # if number of stored schedules less than max number of schedules
+            # AND if schedule was not stored - append schedule to end of list
+            if len(self.top_generated_schedules) < max_number_of_schedules and not schedule_stored:
+                self.top_generated_schedules.append(self)
+                schedule_stored = True
 
+        return schedule_stored
 
+    def create_pattern_column(self):
+        # create pattern column as list:
+        pattern = []
 
+        # build pattern for each row
+        for i in range(0, self.data.number_of_workers):
+            pattern_string = ''
+            for day in days:
+                shift = self.df.at[i, day]
+                if shift == 'X':
+                    pattern_string += 'X'
+                elif shift == 7 - (self.data.shift_length / 2):
+                    pattern_string += 'S'
+                elif shift == 15 - (self.data.shift_length / 2):
+                    pattern_string += 'S'
+                elif shift == 23 - (self.data.shift_length / 2):
+                    pattern_string += 'S'
+                elif isinstance(shift, list):
+                    pattern_string += '[ ]'
+                else:
+                    shift_type = determine_type_of_shift(shift, self.data.shift_length)
 
+                    if shift_type == "MID":
+                        pattern_string += 'M'
+                    elif shift_type == "DAY":
+                        pattern_string += "D"
+                    else:
+                        pattern_string += "E"
 
+            if self.data.number_of_days_in_rdo == 2:
+                if "XX" in pattern_string:
+                    pattern_string_list = pattern_string.split('XX')
+                    pattern_string_to_append = pattern_string_list[1] + pattern_string_list[0]
+                else:
+                    pattern_string_to_append = ''
+                    for char in pattern_string:
+                        if char != 'X':
+                            pattern_string_to_append += char
+            elif self.data.number_of_days_in_rdo == 3:
+                if "XXX" in pattern_string:
+                    pattern_string_list = pattern_string.split('XXX')
+                    pattern_string_to_append = pattern_string_list[1] + pattern_string_list[0]
+                elif "XX" in pattern_string:
+                    pattern_string_list = pattern_string.split('XX')
+                    temp_pattern_string_to_append = pattern_string_list[1] + pattern_string_list[0]
+                    pattern_string_to_append = ''
+                    for char in temp_pattern_string_to_append:
+                        if char != 'X':
+                            pattern_string_to_append += char
+                else:
+                    pattern_string_to_append = ''
+                    for char in pattern_string:
+                        if char != 'X':
+                            pattern_string_to_append += char
 
+            pattern.append(pattern_string_to_append)
 
+        self.df["Pattern"] = pattern
 
+    def create_shift_totals_df(self):
+        days = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
 
+        # create dataframe to hold number of each shift assigned per day
+        total_shifts_df = pd.DataFrame(columns=days)
 
+        for shift in list(self.data.daily_shifts['SUN'].keys()):
+            df_to_append = pd.DataFrame([[0, 0, 0, 0, 0, 0, 0]], columns=days, index=[shift])
+            total_shifts_df = total_shifts_df.append(df_to_append)
 
+        for day in days:
+            for shift, quantity in self.shifts_assigned[day].items():
+                total_shifts_df.at[shift, day] = quantity
 
+        self.shift_totals_df = total_shifts_df
 
+    def convert_df_from_int_to_st(self):
 
+        for row in range(0, len(self.df)):
+            for day in days:
+                if isinstance(self.df.at[row, day], list):
+                    continue
+                elif isinstance(self.df.at[row, day], float):
+                    decimal_value = self.df.at[row, day]
+                    hours = str(decimal_value).split('.')[0]
+                    minutes = int(round((decimal_value % 1) * 60, 0))
+                    if minutes < 10:
+                        minutes = str(0) + str(minutes)
+                    else:
+                        minutes = str(minutes)
 
+                    self.df.at[row, day] = hours + minutes
+
+                else:
+                    shift_int = self.df.at[row, day]
+                    if shift_int == 'X':
+                        self.df.at[row, day] = shift_int
+                    elif shift_int == 0:
+                        self.df.at[row, day] = 'N'
+                    elif shift_int == 23:
+                        self.df.at[row, day] = 'M'
+                    else:
+                        if self.df.at[row, day] in [6, 7, 8, 13, 15, 16]:
+                            self.df.at[row, day] = shift_int % 12
+                        else:
+                            self.df.at[row, day] = str(shift_int) + "00"
+
+    def determine_if_response_is_complete(self, number_of_attempts, max_number_of_attempts, max_number_of_schedules):
+        # start by assuming response is complete
+        # we only check conditions that could prove it is not complete
+        schedule_response_complete = True
+
+        # if number of attempts is less than number of attempts, we need to check additional factors
+        if number_of_attempts < max_number_of_attempts:
+            # check if number of saved schedules matches the max number of schedules
+            if len(self.top_generated_schedules) == max_number_of_schedules:
+                # check if all grades are 100
+                for schedule in self.top_generated_schedules:
+                    if schedule.grade == 100:
+                        continue
+                    else:
+                        # if we find a grade that is not 100, response is incomplete
+                        schedule_response_complete = False
+                        break
+            # if number of saved is less than max number of schedules, response is incomplete
+            else:
+                schedule_response_complete = False
+
+        return schedule_response_complete

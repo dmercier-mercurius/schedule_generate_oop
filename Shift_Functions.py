@@ -115,10 +115,13 @@ def desirable_move_between_shifts(prev_shift, next_shift, shift_length):
         else:
             return False
     else:
-        if next_shift_type == "MID":
+        if shift_length == 10:
             return True
         else:
-            return False
+            if next_shift_type == "MID":
+                return True
+            else:
+                return False
 
 
 # Identify the sets of shifts that can follow a given shift

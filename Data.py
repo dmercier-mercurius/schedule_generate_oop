@@ -2,9 +2,6 @@ from ShiftLine import *
 from Shift_Functions import *
 import numpy as np
 
-database = Database('ST-AWS')
-business_rules = database.get_all_business_rules()
-
 days = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
 
 
@@ -54,11 +51,7 @@ def sort_daily_shifts(daily_shifts):
             else:
                 i = round(round(i, 2) % 24, 2)
             try:
-                quantity = daily_shifts[day][i]
-                if quantity == 0:
-                    continue
-                else:
-                    sorted_daily_shifts[day][i] = daily_shifts[day][i]
+                sorted_daily_shifts[day][i] = daily_shifts[day][i]
             except KeyError:
                 continue
     return sorted_daily_shifts
@@ -143,9 +136,9 @@ def get_potential_shifts_dict(daily_shifts, shift_length, check_for_desirable=Tr
 # RDO_is_contiguous should be passed from Angular in future
 # check for desirable allows later iterations of program to ignore desirable moves check
 class Data:
-    def __init__(self, input_data, RDO_is_contiguous, check_for_desirable=True):
-        self.business_rules = business_rules
+    def __init__(self, input_data, business_rules, RDO_is_contiguous, check_for_desirable=True):
         self.shift_length = input_data["shift_length"]
+        self.business_rules_for_given_shift_length = get_business_rules(business_rules, self.shift_length)
         self.preferred_work_pattern = input_data['PWP']
         self.__preferred_shift_order_mt = input_data['PSO']
         self.preferred_shift_order = convert_preferred_shift_order(self.__preferred_shift_order_mt)
@@ -225,23 +218,23 @@ class Data:
     def errors_in_preferred_shift_order(self):
 
         # create blank shift_line
-        shift_line = ShiftLine('PSO', 8)
+        shift_line = ShiftLine('PSO', self.shift_length)
 
         # insert RDO into the preferred shift order depending on number of RDO and if they are contiguous
         if self.number_of_days_in_rdo == 2:
             list_of_shifts = self.preferred_shift_order + ['X', 'X']
         else:
             if self.RDO_is_contiguous:
-                list_of_shifts = self.preferred_shift_order[0:1] + ['X'] + self.preferred_shift_order[2:3] + ['X', 'X']
-            else:
                 list_of_shifts = self.preferred_shift_order + ['X', 'X', 'X']
+            else:
+                list_of_shifts = self.preferred_shift_order[0:2] + ['X'] + self.preferred_shift_order[2:] + ['X', 'X']
 
         # fill shift line with PSO
         for i in range(len(days)):
             shift_line.shifts_dict[days[i]] = list_of_shifts[i]
 
         # test all business rules
-        passes_business_rules = shift_line.check_all_business_rules('MID', 5)
+        passes_business_rules = shift_line.check_all_business_rules('MID', ignore_desirable_moves=True)
 
         if passes_business_rules:
             return False
